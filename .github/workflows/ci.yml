@@ -49,6 +49,9 @@ jobs:
           path: dist
       - name: Install the built wheel and test runner
         run: python -c "from pathlib import Path; import subprocess, sys; subprocess.check_call([sys.executable, '-m', 'pip', 'install', str(next(Path('dist').glob('*.whl'))), 'pytest'])"
-      - run: python -m pytest
+      - run: python -m pytest --junitxml="${{ runner.temp }}/rsde-tests.xml"
+      - name: Report test failures
+        if: always()
+        run: python scripts/report_tests.py
       - name: Test wheel and source installs in clean environments
         run: python scripts/check_install.py dist
