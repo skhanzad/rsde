@@ -1,0 +1,24 @@
+# Agent instructions (kept local, not versioned)
+CLAUDE.md
+
+# RSDE execution state and run logs
+.rsde/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.idea/
+.DS_Store
