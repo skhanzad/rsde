@@ -13,6 +13,7 @@ import posixpath
 import re
 
 from rsde.diagnostics import Diagnostic, Diagnostics, Related, SourceSpan
+from rsde.globs import GlobError, compile_pattern
 from rsde.syntax.ast import (
     Capability,
     Directive,
@@ -52,6 +53,24 @@ _TEXT_KINDS = {
     DirectiveKind.INVARIANT: "invariants",
     DirectiveKind.DONE: "done",
 }
+
+
+def list_items(value: str) -> list[str]:
+    """Split a comma-separated list that may wrap across continuation lines.
+
+    A line break next to a comma (``a,⏎b`` or ``a⏎, b``) does not create an
+    empty item; ``a,,b`` on one line still does, and is reported.
+    """
+    items: list[str] = []
+    rows = value.split("\n")
+    for r, row in enumerate(rows):
+        parts = row.split(",")
+        for k, part in enumerate(parts):
+            part = part.strip()
+            at_line_break = (k == len(parts) - 1 and r < len(rows) - 1) or (k == 0 and r > 0)
+            if part or not at_line_break:
+                items.append(part)
+    return items
 
 
 def spec_id_for(path: str) -> str:
@@ -198,7 +217,7 @@ class _DocumentBuilder:
 
     def _implement(self, value: str, span: SourceSpan) -> None:
         head, _description = split_description(value)
-        for raw_pattern in head.replace("\n", ",").split(","):
+        for raw_pattern in list_items(head):
             pattern = strip_code(raw_pattern).replace("\\", "/")
             if not pattern:
                 self.diags.error(
@@ -228,13 +247,23 @@ class _DocumentBuilder:
                     help="list the specific files or directories this spec owns",
                 )
                 continue
+            try:
+                compile_pattern(normalized)
+            except GlobError as exc:
+                self.diags.error(
+                    "E106",
+                    str(exc),
+                    span,
+                    help="globs support *, **, ? and character classes such as [a-z] or [!_]",
+                )
+                continue
             if pattern.endswith("/"):
                 normalized += "/"
             self.implement.append(ImplementTarget(normalized, span))
 
     def _capabilities(self, value: str, span: SourceSpan, kind: DirectiveKind) -> list[Capability]:
         head, description = split_description(value)
-        names = [strip_code(name) for name in head.replace("\n", ",").split(",")]
+        names = [strip_code(name) for name in list_items(head)]
         out: list[Capability] = []
         for name in names:
             if not name:

@@ -58,8 +58,13 @@ def test_escaped_at_is_literal_prose():
     assert "- @spec also literal" in scanned.prose
 
 
-def test_front_matter_is_skipped():
-    assert values("---\nid: x\n@goal hidden\n---\n# T\n@goal yes\n") == [("goal", "yes")]
+def test_yaml_front_matter_is_skipped():
+    assert values("---\nid: x\ntags: [a, b]\n---\n# T\n@goal yes\n") == [("goal", "yes")]
+
+
+def test_a_rule_followed_by_markdown_is_not_front_matter():
+    text = "---\nThis is prose, not YAML.\n@goal kept\n---\n@goal also kept\n"
+    assert values(text) == [("goal", "kept"), ("goal", "also kept")]
 
 
 def test_unterminated_fence_is_reported():
@@ -80,3 +85,28 @@ def test_mentions_and_emails_are_not_directives():
 def test_prose_excludes_title_and_directives_and_collapses_blank_lines():
     scanned = scan("# T\n\nIntro text.\n@goal g\n\n\n\nMore.\n")
     assert scanned.prose == "Intro text.\n\nMore."
+
+
+def test_fences_opened_on_a_list_item_line_are_opaque():
+    text = "- ```\n  @verify rm -rf /\n  ```\n\n@goal real\n@verify true\n"
+    assert values(text) == [("goal", "real"), ("verify", "true")]
+
+
+def test_html_comments_are_masked_wherever_they_start():
+    assert values("text <!-- hidden\n@verify rm -rf /\n-->\n@goal shown\n") == [("goal", "shown")]
+    assert values("@goal visible <!-- trailing note -->\n") == [("goal", "visible")]
+    assert values("Write `<!--` to open a comment.\n@goal not hidden\n") == [("goal", "not hidden")]
+
+
+def test_masking_keeps_columns_and_reports_unclosed_comments():
+    scanned = scan("<!-- c --> @goal x\nprose <!-- never closed\n@goal hidden\n")
+    assert [(d.value, d.column) for d in scanned.directives] == [("x", 12)]
+    assert [issue.line for issue in scanned.issues] == [2]
+
+
+def test_colon_without_space_is_still_a_directive():
+    assert values("@requires:todo.storage\n@goal:x\n") == [("requires", "todo.storage"), ("goal", "x")]
+
+
+def test_byte_order_mark_is_ignored():
+    assert values("﻿@goal first line\n") == [("goal", "first line")]

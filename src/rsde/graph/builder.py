@@ -110,6 +110,9 @@ class SpecIndex:
 
     def _resolve_path(self, target: str, from_path: str) -> Resolution:
         target = target.replace("\\", "/")
+        # Only a plain `a/b` may fall back to name lookup; `/a`, `./a` and `../a`
+        # say exactly where the file is.
+        anchored = target.startswith(("/", "./", "../"))
         tried: list[str] = []
         if target.startswith("/"):
             bases = [""]
@@ -129,7 +132,7 @@ class SpecIndex:
                 tried.append(name)
                 if self._exists(name):
                     return Resolution(name, tried)
-        if not target.endswith(".md"):
+        if not target.endswith(".md") and not anchored:
             by_name = self._resolve_name(target)
             if by_name.path or by_name.ambiguous:
                 return by_name

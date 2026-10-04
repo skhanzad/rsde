@@ -130,3 +130,9 @@ def test_dependency_edges_from_capabilities_and_depends(tmp_path):
     assert deps.dependencies("c") == ["b", "a"]
     assert deps.dependents("a") == ["b", "c"]
     assert deps.provider("cap.b") == "b" and deps.consumers("cap.a") == ["b"]
+
+
+def test_rooted_paths_never_fall_back_to_name_lookup(tmp_path):
+    write_files(tmp_path, {"master.md": "@spec /specs/model\n", "sub/specs/model.spec.md": ""})
+    diag = graph_of(tmp_path).errors[0]
+    assert diag.code == "E201" and "specs/model.spec.md" in diag.notes[0]

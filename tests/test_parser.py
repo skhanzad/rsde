@@ -197,3 +197,17 @@ def test_intent_digest_tracks_only_inherited_directives():
     other_constraint = parse("@goal g\n@constraint d\n@behavior one\n")[0]
     assert base.intent_digest() == other_behavior.intent_digest()
     assert base.intent_digest() != other_constraint.intent_digest()
+
+
+def test_lists_may_wrap_after_or_before_a_comma():
+    doc, diags = parse("@implement todo/storage.py,\n    tests/test_storage.py\n@requires a.b\n  , c.d\n")
+    assert diags == []
+    assert doc.implement_patterns == ("todo/storage.py", "tests/test_storage.py")
+    assert [c.name for c in doc.requires] == ["a.b", "c.d"]
+    assert only(parse("@implement a,,b\n")[1]).message == "empty path in `@implement` list"
+
+
+@pytest.mark.parametrize("pattern", ["src/[z-a].py", "a[]b", "[!]x"])
+def test_malformed_globs_are_reported_not_raised(pattern):
+    diag = only(parse(f"@implement {pattern}\n")[1])
+    assert diag.code == "E106" and "invalid glob" in diag.message

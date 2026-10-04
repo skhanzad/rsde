@@ -4,16 +4,18 @@ A spec file is ordinary Markdown. The scanner walks it line by line and pulls
 out *directives* (lines that start with ``@name``) while keeping everything
 else as prose. It understands just enough Markdown to be safe:
 
-* fenced code blocks (``` and ~~~) and HTML comments are opaque, so examples
-  inside documentation are never mistaken for directives;
+* fenced code blocks (``` and ~~~, also opened on a list-item line) are
+  opaque, so examples inside documentation are never mistaken for directives;
+* HTML comments are blanked out wherever they start, so nothing hidden from a
+  rendered page can act as a directive (``<!--`` inside inline code is text);
 * a directive may sit inside a list item (``- @behavior ...``) and may be
-  written with a trailing colon (``@goal: ...``);
+  written with a colon (``@goal: ...`` or ``@goal:...``);
 * a directive continues onto following lines that are indented deeper than
   the directive itself;
 * a directive with no inline value takes its value from an immediately
   following fenced code block (useful for multi-line ``@verify`` scripts);
 * ``\@`` at the start of a line escapes a literal ``@``;
-* YAML front matter is skipped.
+* YAML front matter and a UTF-8 byte-order mark are skipped.
 """
 
 from __future__ import annotations
@@ -22,18 +24,19 @@ import re
 import textwrap
 from dataclasses import dataclass
 
+_MARKER = r"(?:[-*+]|\d{1,9}[.)])"  # a list-item marker: -, *, + or 1. / 1)
 DIRECTIVE_RE = re.compile(
     r"^(?P<indent>[ \t]*)"
-    r"(?:(?P<marker>[-*+]|\d{1,9}[.)])[ \t]+)?"
-    r"@(?P<name>[A-Za-z][A-Za-z0-9_-]*):?"
-    r"(?=[ \t]|$)"
+    rf"(?:(?P<marker>{_MARKER})[ \t]+)?"
+    r"@(?P<name>[A-Za-z][A-Za-z0-9_-]*)"
+    r"(?::|(?=[ \t]|$))"
     r"[ \t]*(?P<value>.*?)[ \t]*$"
 )
-FENCE_RE = re.compile(r"^(?P<indent>[ \t]*)(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
+FENCE_RE = re.compile(rf"^(?P<indent>[ \t]*)(?:{_MARKER}[ \t]+)?(?P<fence>`{{3,}}|~{{3,}})(?P<info>.*)$")
 CLOSING_FENCE_RE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})[ \t]*$")
 HEADING_RE = re.compile(r"^ {0,3}(?P<hashes>#{1,6})(?:[ \t]+(?P<text>.*?))?(?:[ \t]+#+)?[ \t]*$")
-COMMENT_START_RE = re.compile(r"^[ \t]*<!--")
-ESCAPED_AT_RE = re.compile(r"^(?P<prefix>[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?)\\@")
+ESCAPED_AT_RE = re.compile(rf"^(?P<prefix>[ \t]*(?:{_MARKER}[ \t]+)?)\\@")
+_YAML_LINE = re.compile(r"^(?:[ \t].*|[-?][ \t].*|-|#.*|[A-Za-z0-9_\"'][^:]*:.*|[ \t]*)$")
 
 
 @dataclass(frozen=True)
@@ -89,12 +92,16 @@ class _Fence:
 
 def scan(text: str) -> ScannedDocument:
     """Split a spec file into directives, headings and prose."""
-    lines = text.splitlines()
+    text = text.removeprefix("﻿")
+    original = text.splitlines()
+    issues: list[ScanIssue] = []
+    lines, unclosed_comment = _mask_comments(original)
+    if unclosed_comment is not None:
+        issues.append(ScanIssue(unclosed_comment, "this HTML comment is never closed, so the rest of the file is ignored"))
     n = len(lines)
     directives: list[RawDirective] = []
     headings: list[Heading] = []
     prose: list[tuple[int, str]] = []
-    issues: list[ScanIssue] = []
 
     i = _skip_front_matter(lines)
     while i < n:
@@ -107,14 +114,6 @@ def scan(text: str) -> ScannedDocument:
                 issues.append(ScanIssue(i + 1, "this code fence is never closed, so the rest of the file is treated as code"))
                 end = n - 1
             prose.extend((k, lines[k]) for k in range(i, end + 1))
-            i = end + 1
-            continue
-
-        if COMMENT_START_RE.match(line):
-            end = _find_comment_end(lines, i)
-            if end is None:
-                issues.append(ScanIssue(i + 1, "this HTML comment is never closed, so the rest of the file is ignored"))
-                break
             i = end + 1
             continue
 
@@ -134,11 +133,11 @@ def scan(text: str) -> ScannedDocument:
         prose.append((i, _unescape(line)))
         i += 1
 
-    scanned = ScannedDocument(tuple(lines), tuple(directives), tuple(headings), "", tuple(issues))
+    scanned = ScannedDocument(tuple(original), tuple(directives), tuple(headings), "", tuple(issues))
     title = scanned.title
     title_index = title.line - 1 if title is not None else -1
     body = _tidy([text for index, text in prose if index != title_index])
-    return ScannedDocument(tuple(lines), tuple(directives), tuple(headings), body, tuple(issues))
+    return ScannedDocument(tuple(original), tuple(directives), tuple(headings), body, tuple(issues))
 
 
 def _read_directive(
@@ -174,24 +173,77 @@ def _read_directive(
         nxt = lines[j]
         if not nxt.strip():
             break
-        if (
-            DIRECTIVE_RE.match(nxt)
-            or _open_fence(nxt)
-            or HEADING_RE.match(nxt)
-            or COMMENT_START_RE.match(nxt)
-            or _indent_width(nxt) <= indent
-        ):
+        if DIRECTIVE_RE.match(nxt) or _open_fence(nxt) or HEADING_RE.match(nxt) or _indent_width(nxt) <= indent:
             break
         parts.append(nxt.strip())
         j += 1
     return RawDirective(name, "\n".join(parts), i + 1, column, length, j), j
 
 
+def _mask_comments(lines: list[str]) -> tuple[list[str], int | None]:
+    """Blank out HTML comments outside code fences, keeping every column in place.
+
+    Returns the masked lines and the line where an unclosed comment starts.
+    """
+    out: list[str] = []
+    fence: _Fence | None = None
+    open_line: int | None = None
+    for index, line in enumerate(lines):
+        if fence is not None:
+            out.append(line)
+            if _closes(line, fence):
+                fence = None
+            continue
+        if open_line is None:
+            opened = _open_fence(line)
+            if opened is not None:
+                fence = opened
+                out.append(line)
+                continue
+        chars = list(line)
+        pos = 0
+        while pos < len(line):
+            if open_line is None:
+                start = _comment_start(line, pos)
+                if start < 0:
+                    break
+                open_line = index + 1
+                mask_from, search_from = start, start + 4
+            else:
+                mask_from, search_from = pos, pos
+            end = line.find("-->", search_from)
+            stop = len(line) if end < 0 else end + 3
+            chars[mask_from:stop] = " " * (stop - mask_from)
+            pos = stop
+            if end >= 0:
+                open_line = None
+        out.append("".join(chars))
+    return out, open_line
+
+
+def _comment_start(line: str, pos: int) -> int:
+    """Index of the next ``<!--`` at or after ``pos`` that is not inside inline code."""
+    i = pos
+    while i < len(line):
+        if line.startswith("<!--", i):
+            return i
+        if line[i] == "`":
+            j = i
+            while j < len(line) and line[j] == "`":
+                j += 1
+            closing = re.compile(rf"(?<!`){line[i:j]}(?!`)").search(line, j)
+            i = closing.end() if closing else j
+            continue
+        i += 1
+    return -1
+
+
 def _skip_front_matter(lines: list[str]) -> int:
+    """Skip a leading YAML block; a ``---`` rule followed by Markdown is not front matter."""
     if lines and lines[0].strip() == "---":
         for j in range(1, len(lines)):
             if lines[j].strip() in ("---", "..."):
-                return j + 1
+                return j + 1 if all(_YAML_LINE.match(line) for line in lines[1:j]) else 0
     return 0
 
 
@@ -205,20 +257,14 @@ def _open_fence(line: str) -> _Fence | None:
     return _Fence(fence[0], len(fence), info)
 
 
+def _closes(line: str, fence: _Fence) -> bool:
+    match = CLOSING_FENCE_RE.match(line)
+    return bool(match and match.group("fence")[0] == fence.char and len(match.group("fence")) >= fence.length)
+
+
 def _find_fence_end(lines: list[str], start: int, fence: _Fence) -> int | None:
     for j in range(start, len(lines)):
-        match = CLOSING_FENCE_RE.match(lines[j])
-        if match and match.group("fence")[0] == fence.char and len(match.group("fence")) >= fence.length:
-            return j
-    return None
-
-
-def _find_comment_end(lines: list[str], start: int) -> int | None:
-    first = lines[start]
-    if "-->" in first[first.index("<!--") + 4 :]:
-        return start
-    for j in range(start + 1, len(lines)):
-        if "-->" in lines[j]:
+        if _closes(lines[j], fence):
             return j
     return None
 

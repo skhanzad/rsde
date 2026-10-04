@@ -87,7 +87,7 @@ def split_items(value: str) -> tuple[list[str], str]:
                 raise ReferenceSyntaxError("empty item before ','")
             items.append(match.group(0))
             pos = match.end()
-        while pos < n and value[pos] in " \t":
+        while pos < n and value[pos].isspace():
             pos += 1
         if pos >= n:
             break
