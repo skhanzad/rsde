@@ -137,9 +137,13 @@ def list_workspace_files(root: Path, ignore: Sequence[str] = ()) -> list[str]:
 
 
 def _git_files(root: Path) -> list[str] | None:
+    """Files according to git, or None when git cannot describe this workspace."""
     if shutil.which("git") is None:
         return None
     try:
+        ignored = subprocess.run(["git", "-C", str(root), "check-ignore", "-q", "."], capture_output=True, timeout=60)
+        if ignored.returncode == 0:
+            return None  # the workspace itself is git-ignored: git would hide every file
         proc = subprocess.run(
             ["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
             capture_output=True,
@@ -150,7 +154,8 @@ def _git_files(root: Path) -> list[str] | None:
     if proc.returncode != 0:
         return None
     paths = proc.stdout.decode("utf-8", "surrogateescape").split("\0")
-    return [p for p in paths if p and (root / p).is_file()]
+    files = [p for p in paths if p and (root / p).is_file()]
+    return files or None
 
 
 def _walk_files(root: Path) -> list[str]:

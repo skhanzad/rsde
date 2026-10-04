@@ -17,7 +17,7 @@ import posixpath
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from rsde.diagnostics import Diagnostic, SourceSpan
 from rsde.syntax.ast import SpecDocument
@@ -42,7 +42,7 @@ class DependencyEdge:
 class Hierarchy:
     """The containment tree built from ``@spec``. Every spec has one parent."""
 
-    def __init__(self, root: str, parents: dict[str, str | None], children: dict[str, Iterable[str]]) -> None:
+    def __init__(self, root: str, parents: Mapping[str, str | None], children: Mapping[str, Iterable[str]]) -> None:
         self.root = root
         self._parent = dict(parents)
         self._children = {k: tuple(v) for k, v in children.items()}

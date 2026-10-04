@@ -27,8 +27,12 @@ from rsde.agents.replay import ReplayAdapter
 from rsde.repository.config import Config
 
 BUILTIN_ADAPTERS: dict[str, type[AgentAdapter]] = {
-    cls.name: cls
-    for cls in (NoneAdapter, ManualAdapter, CommandAdapter, ClaudeCodeAdapter, CodexAdapter, ReplayAdapter)
+    "none": NoneAdapter,
+    "manual": ManualAdapter,
+    "command": CommandAdapter,
+    "claude": ClaudeCodeAdapter,
+    "codex": CodexAdapter,
+    "replay": ReplayAdapter,
 }
 ENTRY_POINT_GROUP = "rsde.agents"
 

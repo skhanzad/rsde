@@ -112,10 +112,10 @@ def parse_item(item: str, span: SourceSpan, *, allow_external: bool) -> SpecRef 
         item = strip_code(item)
     if item.startswith("[["):
         match = _WIKILINK.fullmatch(item)
-        target = match.group("target").strip() if match else ""
-        if not target:
+        if match is None or not match.group("target").strip():
             raise ReferenceSyntaxError(f"empty wikilink {item!r}", "write wikilinks as [[spec-name]]")
-        return SpecRef(target, RefStyle.WIKILINK, span, (match.group("alias") or "").strip(), item)
+        alias = (match.group("alias") or "").strip()
+        return SpecRef(match.group("target").strip(), RefStyle.WIKILINK, span, alias, item)
     if item.startswith("["):
         match = _MDLINK.fullmatch(item)
         if match is None:

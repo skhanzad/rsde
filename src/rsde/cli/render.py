@@ -355,8 +355,8 @@ def render_show(
         assert evidence is not None
         section("Evidence")
         out.append(f"  {style.dim('recorded')} {evidence.verified_at} · run {evidence.run_id}")
-        for check in evidence.checks:
-            out.append(f"  {style.ok(check.passed)} {check.command}")
+        for result in evidence.checks:
+            out.append(f"  {style.ok(result.passed)} {result.command}")
     return "\n".join(out)
 
 

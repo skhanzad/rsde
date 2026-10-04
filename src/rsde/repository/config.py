@@ -40,6 +40,15 @@ _SCHEMA: dict[str, dict[str, type | tuple[type, ...]]] = {
 }
 
 
+_TYPE_NAMES: dict[type | tuple[type, ...], str] = {
+    str: "a string",
+    int: "an integer",
+    bool: "true or false",
+    list: "a list",
+    (int, float): "a number",
+}
+
+
 class ConfigError(Exception):
     """``rsde.toml`` is missing, malformed or inconsistent."""
 
@@ -112,8 +121,7 @@ def load_config(root: Path) -> Config:
             if expected is None:
                 raise ConfigError(f"{path}: unknown key `{key}` in [{section}]{_suggest(key, _SCHEMA[section])}")
             if not isinstance(value, expected) or (expected is int and isinstance(value, bool)):
-                kind = expected.__name__ if isinstance(expected, type) else "number"
-                raise ConfigError(f"{path}: [{section}].{key} must be a {kind}, got {value!r}")
+                raise ConfigError(f"{path}: [{section}].{key} must be {_TYPE_NAMES[expected]}, got {value!r}")
         _apply(config, section, values, path)
     return config
 
@@ -159,14 +167,12 @@ def open_workspace(cwd: Path, explicit: Path | None = None, hint: Path | None = 
         if not root.is_dir():
             raise WorkspaceError(f"workspace directory {explicit} does not exist")
     else:
-        root = None
-        if hint is not None and hint.exists():
-            root = find_workspace_root(hint)
-        if root is None:
-            root = find_workspace_root(cwd)
-        if root is None:
+        found = find_workspace_root(hint) if hint is not None and hint.exists() else None
+        found = found or find_workspace_root(cwd)
+        if found is None:
             raise WorkspaceError(
                 f"no RSDE workspace found in {cwd} or any parent directory "
                 f"(looked for {CONFIG_FILE} or {DEFAULT_ROOT_SPEC}); run `rsde init` to create one"
             )
+        root = found
     return Workspace(root, load_config(root))

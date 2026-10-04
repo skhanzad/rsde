@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from rsde import __version__
-from rsde.agents import AgentConfigError, available_agents, create_adapter, render_task_prompt
+from rsde.agents import AgentAdapter, AgentConfigError, available_agents, create_adapter, render_task_prompt
 from rsde.cli.progress import CliEvents
 from rsde.cli.render import (
     graph_to_dict,
@@ -34,8 +34,8 @@ from rsde.cli.style import Style
 from rsde.engine.executor import ExecuteOptions, Executor
 from rsde.engine.reconcile import Reconciler
 from rsde.graph import SpecGraph, SpecSelectorError, affected, build_graph, owners_of, specs_for_paths
-from rsde.planning.fingerprint import Fingerprinter
-from rsde.planning.status import evaluate
+from rsde.planning.fingerprint import Fingerprint, Fingerprinter
+from rsde.planning.status import SpecStatus, evaluate
 from rsde.repository.config import (
     CONFIG_FILE,
     DEFAULT_ROOT_SPEC,
@@ -45,7 +45,7 @@ from rsde.repository.config import (
     load_config,
     open_workspace,
 )
-from rsde.repository.state import StateStore
+from rsde.repository.state import CheckResult, StateStore
 
 EXIT_OK, EXIT_FAIL, EXIT_USAGE, EXIT_INTERRUPTED = 0, 1, 2, 130
 
@@ -210,7 +210,9 @@ def cmd_check(ctx: Context, args: argparse.Namespace) -> int:
     return EXIT_FAIL if failing else EXIT_OK
 
 
-def _statuses(ws: Workspace, graph: SpecGraph):  # type: ignore[no-untyped-def]
+def _statuses(
+    ws: Workspace, graph: SpecGraph
+) -> tuple[StateStore, dict[str, Fingerprint], dict[str, SpecStatus]]:
     state = StateStore(ws.state_dir)
     fingerprints = Fingerprinter(graph, ws.config.ignore).compute(refresh=False)
     return state, fingerprints, evaluate(graph, fingerprints, state.evidence)
@@ -243,7 +245,7 @@ def cmd_show(ctx: Context, args: argparse.Namespace) -> int:
     graph = ctx.graph(ws)
     spec_id = ctx.resolve(graph, args.spec)
     statuses = fingerprints = None
-    evidence_checks = ()
+    evidence_checks: tuple[CheckResult, ...] = ()
     if graph.ok:
         _, fingerprints, statuses = _statuses(ws, graph)
         evidence = statuses[spec_id].evidence
@@ -271,24 +273,16 @@ def cmd_status(ctx: Context, args: argparse.Namespace) -> int:
     for warning in state.warnings:
         ctx.warn(warning)
     if args.format == "json":
-        subtree = graph.hierarchy.subtree(target)
-        ctx.out(
-            to_json(
-                {
-                    "target": target,
-                    "satisfied": statuses[target].satisfied,
-                    "specs": {
-                        s: {
-                            "status": statuses[s].status.value,
-                            "reason": statuses[s].reason,
-                            "fingerprint": fingerprints[s].value,
-                            "verified_at": statuses[s].evidence.verified_at if statuses[s].evidence else None,
-                        }
-                        for s in subtree
-                    },
-                }
-            )
-        )
+        specs = {}
+        for spec_id in graph.hierarchy.subtree(target):
+            status = statuses[spec_id]
+            specs[spec_id] = {
+                "status": status.status.value,
+                "reason": status.reason,
+                "fingerprint": fingerprints[spec_id].value,
+                "verified_at": status.evidence.verified_at if status.evidence is not None else None,
+            }
+        ctx.out(to_json({"target": target, "satisfied": statuses[target].satisfied, "specs": specs}))
         return EXIT_OK
     ctx.out(render_status(graph, statuses, ctx.style, target))
     return EXIT_OK
@@ -306,7 +300,7 @@ def _execute_options(ws: Workspace, args: argparse.Namespace) -> ExecuteOptions:
     )
 
 
-def _adapter(ctx: Context, ws: Workspace, args: argparse.Namespace, *, needed: bool):  # type: ignore[no-untyped-def]
+def _adapter(ctx: Context, ws: Workspace, args: argparse.Namespace, *, needed: bool) -> AgentAdapter:
     name = args.agent or ws.config.agent
     try:
         adapter = create_adapter(name, ws.config, ws.root)

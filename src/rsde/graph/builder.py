@@ -523,15 +523,15 @@ def _check_cycles(
             notes = []
             first_edge: DependencyEdge | None = None
             for a, b in steps:
-                edge = next((e for e in deps.edges_from(a) if e.target == b and (a, b) not in cut), None)
-                if edge is None:
+                step = next((e for e in deps.edges_from(a) if e.target == b and (a, b) not in cut), None)
+                if step is None:
                     notes.append(f"`{a}` contains `{b}` (a parent is satisfied only after its children)")
                     continue
-                first_edge = first_edge or edge
-                if edge.kind == "requires":
-                    notes.append(f"`{a}` requires `{edge.capability}`, provided by `{b}` ({edge.span})")
+                first_edge = first_edge or step
+                if step.kind == "requires":
+                    notes.append(f"`{a}` requires `{step.capability}`, provided by `{b}` ({step.span})")
                 else:
-                    notes.append(f"`{a}` depends on `{b}` ({edge.span})")
+                    notes.append(f"`{a}` depends on `{b}` ({step.span})")
             if first_edge is None:  # defensive: cannot happen for a valid hierarchy
                 continue
             found = True
