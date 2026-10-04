@@ -24,7 +24,7 @@ from typing import Sequence
 from rsde.graph.analysis import execution_order
 from rsde.graph.intent import resolve_intent
 from rsde.graph.model import SpecGraph
-from rsde.repository.files import FileHasher, list_workspace_files, matching_files
+from rsde.repository.files import FileHasher, expand_owned, list_workspace_files, matching_files
 
 
 @dataclass(frozen=True)
@@ -70,10 +70,14 @@ class Fingerprinter:
         self.graph = graph
         self.ignore = tuple(ignore)
         self.hasher = FileHasher(graph.root)
+        self.owned_patterns = sorted({p for doc in graph.specs.values() for p in doc.implement_patterns})
         self.files: list[str] = list(graph.files)
 
     def refresh_files(self) -> list[str]:
-        self.files = list_workspace_files(Path(self.graph.root), self.ignore)
+        """Workspace files, plus files a spec claims even if git ignores them."""
+        root = Path(self.graph.root)
+        listed = list_workspace_files(root, self.ignore)
+        self.files = sorted({*listed, *expand_owned(root, self.owned_patterns)})
         return self.files
 
     def compute(self, refresh: bool = True) -> dict[str, Fingerprint]:

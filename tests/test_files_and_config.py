@@ -144,3 +144,29 @@ def test_workspace_root_is_found_from_nested_directories(tmp_path):
 def test_missing_workspace_explains_how_to_create_one(tmp_path):
     with pytest.raises(WorkspaceError, match="rsde init"):
         open_workspace(tmp_path)
+
+
+def test_hash_cache_never_trusts_a_recently_modified_file(tmp_path):
+    import os
+
+    path = tmp_path / "a.txt"
+    path.write_text("aaaa")
+    hasher = FileHasher(tmp_path)
+    first = hasher.hash_file("a.txt")
+    stat = path.stat()
+    path.write_text("bbbb")  # same size …
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))  # … and the same timestamp tick
+    assert hasher.hash_file("a.txt") != first
+
+
+def test_state_directory_and_bad_globs_in_config(tmp_path):
+    from rsde.repository.config import Workspace, load_config
+
+    (tmp_path / "rsde.toml").write_text('[project]\nstate_dir = "rsde-state"\nignore = ["vendor/**"]\n')
+    ws = Workspace(tmp_path, load_config(tmp_path))
+    assert ws.ignore == ("vendor/**", "rsde-state/")
+    write_files(tmp_path, {"rsde-state/state.json": "{}", "a.py": ""})
+    assert list_workspace_files(tmp_path, ws.ignore) == ["a.py", "rsde.toml"]
+    (tmp_path / "rsde.toml").write_text('[project]\nignore = ["src/[z-a]"]\n')
+    with pytest.raises(ConfigError, match="invalid glob"):
+        load_config(tmp_path)

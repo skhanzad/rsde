@@ -31,6 +31,9 @@ class CliEvents(ExecutionEvents):
         doc = self.graph.specs.get(spec_id)
         return self.style.dim(f"{self.style.dash} {doc.title}") if doc else ""
 
+    def notice(self, message: str) -> None:
+        self.write(self.style.yellow(message))
+
     def plan_ready(self, plan: Plan, agent: str) -> None:
         self.write(
             self.style.bold(f"Executing `{plan.target}`")

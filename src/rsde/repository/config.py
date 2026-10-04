@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from rsde.globs import GlobError, compile_pattern
+
 CONFIG_FILE = "rsde.toml"
 DEFAULT_ROOT_SPEC = "master.md"
 
@@ -86,6 +88,12 @@ class Workspace:
     def state_dir(self) -> Path:
         return self.root / self.config.state_dir
 
+    @property
+    def ignore(self) -> tuple[str, ...]:
+        """Globs never treated as workspace files: [project].ignore plus the state directory."""
+        state = self.config.state_dir.strip("/")
+        return (*self.config.ignore, f"{state}/") if state else tuple(self.config.ignore)
+
     def relative(self, path: Path) -> str | None:
         """``path`` as a workspace-relative POSIX path, or None if it lies outside."""
         try:
@@ -132,6 +140,11 @@ def _apply(config: Config, section: str, values: dict[str, Any], path: Path) -> 
         ignore = values.get("ignore", list(config.ignore))
         if not all(isinstance(item, str) for item in ignore):
             raise ConfigError(f"{path}: [project].ignore must be a list of glob strings")
+        for pattern in ignore:
+            try:
+                compile_pattern(pattern)
+            except GlobError as exc:
+                raise ConfigError(f"{path}: [project].ignore: {exc}") from None
         config.ignore = tuple(ignore)
         config.state_dir = values.get("state_dir", config.state_dir)
     elif section == "execute":

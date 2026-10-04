@@ -27,7 +27,7 @@ from rsde.engine.executor import ExecuteOptions, ExecutionEvents, ExecutionRepor
 from rsde.graph.analysis import execution_order
 from rsde.graph.model import SpecGraph
 from rsde.planning.planner import Action, PlanStep
-from rsde.planning.status import SpecStatus, Status, has_own_checks
+from rsde.planning.status import SpecStatus, Status, has_own_checks, unresolved_violations
 from rsde.repository.config import CONFIG_FILE, Workspace
 from rsde.repository.files import GlobSet, matching_files
 from rsde.repository.state import CheckResult, StateStore
@@ -46,7 +46,7 @@ NON_IMPLEMENTATION = (
 
 @dataclass(frozen=True)
 class Drift:
-    kind: str  # missing-files | failing-checks | unverifiable | shared-file | unowned-files
+    kind: str  # missing-files | failing-checks | scope-violations | unverifiable | shared-file | unowned-files
     message: str
     spec_id: str | None = None
     paths: tuple[str, ...] = ()
@@ -54,7 +54,7 @@ class Drift:
     @property
     def blocking(self) -> bool:
         """Blocking drift keeps the repository non-conformant; the rest is advisory."""
-        return self.kind in ("missing-files", "failing-checks", "unverifiable")
+        return self.kind in ("missing-files", "failing-checks", "scope-violations", "unverifiable")
 
     def to_dict(self) -> dict[str, Any]:
         return {"kind": self.kind, "spec": self.spec_id, "message": self.message, "paths": list(self.paths)}
@@ -169,20 +169,33 @@ class Reconciler:
             results[spec_id] = checks
         return results
 
+    def violation_drift(self) -> list[Drift]:
+        executor = self.executor
+        drift = []
+        for spec_id in self.graph.specs:
+            paths = unresolved_violations(executor.state.violations, spec_id, executor.hash_of)
+            if paths:
+                message = f"`{spec_id}`: changes an agent made outside its scope are still present"
+                drift.append(Drift("scope-violations", message, spec_id, tuple(paths)))
+        return drift
+
     def run(self, *, dry_run: bool = False) -> ReconcileReport:
         executor = self.executor
         root = self.graph.root_id
+        executor.state.prune_violations(executor.hash_of)
+        if executor.options.accept_scope_changes:
+            executor.accept_scope_changes(list(self.graph.specs))
         files = executor.fingerprinter.refresh_files()
         structural = survey(self.graph, files)
         audit = self.audit()
         _, statuses = executor.assess()
-        before = structural + failing_drift(self.graph, statuses)
+        before = structural + self.violation_drift() + failing_drift(self.graph, statuses)
 
         execution = None
         if not dry_run and not statuses[root].satisfied:
             execution = executor.execute(root, command="reconcile")
             _, statuses = executor.assess()
         files = executor.fingerprinter.refresh_files()
-        after = survey(self.graph, files) + failing_drift(self.graph, statuses)
+        after = survey(self.graph, files) + self.violation_drift() + failing_drift(self.graph, statuses)
         conformant = [s for s in self.graph.specs if statuses[s].satisfied]
         return ReconcileReport(root, before, after, audit, statuses, execution, dry_run, conformant)

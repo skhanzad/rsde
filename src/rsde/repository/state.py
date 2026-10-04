@@ -15,7 +15,7 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterable, Mapping
 
 STATE_VERSION = 1
 STATE_FILE = "state.json"
@@ -105,12 +105,19 @@ class RunRecord:
 
 
 class StateStore:
-    """Reads and atomically writes ``.rsde/state.json``."""
+    """Reads and atomically writes ``.rsde/state.json``.
+
+    Besides evidence, the store remembers *violations*: files an agent changed
+    outside its spec's scope (under strict scope) or protected files it touched,
+    each with the content hash it had before the agent ran. A violation keeps
+    its spec failed until the file is restored or a human accepts the change.
+    """
 
     def __init__(self, state_dir: Path) -> None:
         self.state_dir = state_dir
         self.path = state_dir / STATE_FILE
         self.evidence: dict[str, Evidence] = {}
+        self.violations: dict[str, dict[str, str]] = {}
         self.runs: list[dict[str, Any]] = []
         self.warnings: list[str] = []
         self._load()
@@ -123,6 +130,7 @@ class StateStore:
             if data.get("version") != STATE_VERSION:
                 raise ValueError(f"unsupported state version {data.get('version')!r}")
             self.evidence = {k: Evidence.from_dict(v) for k, v in data.get("evidence", {}).items()}
+            self.violations = {k: {str(p): str(h) for p, h in v.items()} for k, v in data.get("violations", {}).items()}
             self.runs = list(data.get("runs", []))
         except (ValueError, KeyError, TypeError, AttributeError) as exc:
             backup = self.path.with_name(f"{STATE_FILE}.corrupt-{datetime.now():%Y%m%d%H%M%S}")
@@ -134,13 +142,33 @@ class StateStore:
                 f"ignored unreadable execution state ({exc}); moved it to {backup}. "
                 "All specs will be re-verified."
             )
-            self.evidence, self.runs = {}, []
+            self.evidence, self.violations, self.runs = {}, {}, []
 
     def get(self, spec_id: str) -> Evidence | None:
         return self.evidence.get(spec_id)
 
     def put(self, evidence: Evidence) -> None:
         self.evidence[evidence.spec_id] = evidence
+
+    def record_violations(self, spec_id: str, originals: Mapping[str, str]) -> None:
+        """Remember changes made while implementing ``spec_id``; ``originals`` maps each
+        path to its hash before the agent ran ("missing" if it did not exist)."""
+        entry = self.violations.setdefault(spec_id, {})
+        for path, original in originals.items():
+            entry.setdefault(path, original)
+
+    def clear_violations(self, spec_ids: Iterable[str]) -> dict[str, dict[str, str]]:
+        """Accept the recorded changes of ``spec_ids``; returns what was cleared."""
+        return {s: self.violations.pop(s) for s in list(spec_ids) if s in self.violations}
+
+    def prune_violations(self, hash_of: Callable[[str], str]) -> None:
+        """Forget violations whose files have been restored to their original content."""
+        for spec_id in list(self.violations):
+            remaining = {p: o for p, o in self.violations[spec_id].items() if hash_of(p) != o}
+            if remaining:
+                self.violations[spec_id] = remaining
+            else:
+                del self.violations[spec_id]
 
     def record_run(self, run: RunRecord) -> None:
         self.runs = [r for r in self.runs if r.get("id") != run.id]
@@ -152,6 +180,7 @@ class StateStore:
         payload = {
             "version": STATE_VERSION,
             "evidence": {k: self.evidence[k].to_dict() for k in sorted(self.evidence)},
+            "violations": {k: dict(sorted(v.items())) for k, v in sorted(self.violations.items()) if v},
             "runs": self.runs,
         }
         fd, tmp = tempfile.mkstemp(dir=self.state_dir, prefix=".state-", suffix=".json")

@@ -463,6 +463,7 @@ def render_affected(impacts: Sequence[Impact], style: Style, seeds: Mapping[str,
 _DRIFT_TITLES = {
     "missing-files": "declared implementation missing",
     "failing-checks": "failing checks",
+    "scope-violations": "agent changes outside scope (restore them, or accept with --accept-scope-changes)",
     "unverifiable": "unverifiable specs",
     "shared-file": "files claimed by several specs",
     "unowned-files": "files no spec owns (never deleted; adopt them with @implement or ignore them in rsde.toml)",
@@ -482,7 +483,7 @@ def render_drift(drift: Sequence[Any], style: Style) -> list[str]:
         for item in items:
             out.append(f"    - {item.message}")
             paths = item.paths if kind != "unowned-files" else item.paths[:10]
-            if paths and kind in ("missing-files", "unowned-files"):
+            if paths and kind in ("missing-files", "unowned-files", "scope-violations"):
                 out.append(style.dim("      " + ", ".join(paths) + (" …" if len(item.paths) > len(paths) else "")))
     return out
 

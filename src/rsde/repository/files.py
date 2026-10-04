@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
+
+from rsde.globs import compile_pattern, literal_prefix
 
 #: Directories that never belong to a workspace's implementation.
 IGNORED_DIRS = frozenset(
@@ -39,57 +41,10 @@ IGNORED_DIRS = frozenset(
 IGNORED_GLOBS = ("**/*.pyc", "**/*.pyo", "**/*.egg-info", "**/.DS_Store")
 
 _HASH_LIMIT = 64 * 1024 * 1024  # larger files are fingerprinted by size and mtime
-
-
-def glob_to_regex(pattern: str) -> str:
-    """Translate a workspace glob into a regular expression (without anchors).
-
-    ``**`` crosses directory boundaries, ``*`` and ``?`` stay inside one path
-    segment, and ``[...]`` is a character class (``[!...]`` negates).
-    """
-    out: list[str] = []
-    i, n = 0, len(pattern)
-    while i < n:
-        c = pattern[i]
-        if c == "*":
-            if pattern.startswith("**/", i):
-                out.append("(?:.*/)?")
-                i += 3
-            elif pattern.startswith("**", i):
-                out.append(".*")
-                i += 2
-            else:
-                out.append("[^/]*")
-                i += 1
-        elif c == "?":
-            out.append("[^/]")
-            i += 1
-        elif c == "[":
-            j = pattern.find("]", i + 1)
-            if j < 0:
-                out.append(re.escape(c))
-                i += 1
-            else:
-                body = pattern[i + 1 : j]
-                if body.startswith("!"):
-                    body = "^" + body[1:]
-                out.append("[" + body.replace("\\", "\\\\") + "]")
-                i = j + 1
-        else:
-            out.append(re.escape(c))
-            i += 1
-    return "".join(out)
-
-
-def compile_pattern(pattern: str) -> re.Pattern[str]:
-    """Compile an ownership pattern.
-
-    A pattern matches a file when it matches the file's path *or any of its
-    parent directories*, so ``src/auth/``, ``src/auth`` and ``src/*`` all claim
-    everything below ``src/auth``.
-    """
-    body = glob_to_regex(pattern.rstrip("/"))
-    return re.compile(f"^{body}(?:/.*)?$")
+# A file modified this recently could be rewritten again within the same timestamp
+# tick without its (size, mtime) changing, so its hash is never cached (cf. git's
+# "racily clean" entries).
+_RACY_WINDOW_NS = 2_000_000_000
 
 
 class GlobSet:
@@ -107,6 +62,9 @@ class GlobSet:
 
     def __bool__(self) -> bool:
         return bool(self.patterns)
+
+
+_IGNORED_FILES = GlobSet(IGNORED_GLOBS)
 
 
 def matching_files(files: Iterable[str], patterns: Sequence[str]) -> list[str]:
@@ -134,6 +92,33 @@ def list_workspace_files(root: Path, ignore: Sequence[str] = ()) -> list[str]:
             continue
         result.append(rel)
     return sorted(set(result))
+
+
+def expand_owned(root: Path, patterns: Iterable[str]) -> list[str]:
+    """Files on disk claimed by ``patterns``, whether or not git ignores them.
+
+    A spec that declares ownership of a generated, git-ignored file must still
+    see it: it counts for the implementation check and for fingerprints.
+    """
+    found: set[str] = set()
+    for pattern in patterns:
+        regex = compile_pattern(pattern)
+        base = literal_prefix(pattern)
+        start = root / base if base else root
+        if start.is_file():
+            if regex.match(base):
+                found.add(base)
+            continue
+        if not start.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(start):
+            dirnames[:] = sorted(d for d in dirnames if d not in IGNORED_DIRS)
+            rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
+            for name in filenames:
+                rel = name if rel_dir == "." else f"{rel_dir}/{name}"
+                if regex.match(rel) and not _IGNORED_FILES.matches(rel):
+                    found.add(rel)
+    return sorted(found)
 
 
 def _git_files(root: Path) -> list[str] | None:
@@ -196,7 +181,10 @@ class FileHasher:
             except OSError:
                 return "unreadable"
             digest = h.hexdigest()
-        self._cache[rel] = (st.st_size, st.st_mtime_ns, digest)
+        if time.time_ns() - st.st_mtime_ns > _RACY_WINDOW_NS:
+            self._cache[rel] = (st.st_size, st.st_mtime_ns, digest)
+        else:
+            self._cache.pop(rel, None)
         return digest
 
     def digest(self, rels: Iterable[str]) -> str:

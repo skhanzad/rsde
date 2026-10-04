@@ -89,6 +89,6 @@ def build_plan(
             action, reason = Action.SKIP, "fresh passing evidence"
         else:
             action = Action.CHECK if verify_only else Action.VERIFY
-            reason = _REASONS[before.own]
+            reason = before.reason if before.status is Status.FAILED else _REASONS[before.own]
         steps.append(PlanStep(spec_id, action, reason, before, prerequisites))
     return Plan(target, tuple(steps))
