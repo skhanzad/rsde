@@ -47,6 +47,7 @@ def run_process(
     cwd: Path,
     shell: bool = False,
     env: Mapping[str, str] | None = None,
+    unset_env: Sequence[str] = (),
     timeout: float | None = None,
     stdin_text: str | None = None,
     on_output: Callable[[str], None] | None = None,
@@ -54,7 +55,8 @@ def run_process(
 ) -> ProcessResult:
     """Run a process, capturing combined stdout/stderr, with a hard timeout."""
     started = time.monotonic()
-    full_env = {**os.environ, **(env or {})}
+    full_env = {k: v for k, v in os.environ.items() if k not in unset_env}
+    full_env.update(env or {})
     try:
         proc = subprocess.Popen(
             args,

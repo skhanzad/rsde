@@ -17,5 +17,7 @@ max_attempts = 2
 [agents.replay]
 source = ".reference"
 
-[agents.claude]
-command = ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits", "--output-format", "text"]
+# The built-in `claude` and `codex` adapters work without configuration.
+# Extra arguments are appended to their default command, for example:
+# [agents.claude]
+# args = ["--model", "sonnet", "--max-turns", "30"]
