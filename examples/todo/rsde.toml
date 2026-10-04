@@ -1,0 +1,21 @@
+# RSDE configuration for the todo example.
+
+[project]
+root = "master.md"
+# The reference implementation replayed by the offline `replay` agent is not
+# part of this project's own implementation.
+ignore = [".reference/**"]
+
+[execute]
+# `rsde execute` only verifies unless you choose an agent:
+#   rsde execute --agent replay     offline, deterministic demo
+#   rsde execute --agent claude     Claude Code
+#   rsde execute --agent codex      OpenAI Codex
+agent = "none"
+max_attempts = 2
+
+[agents.replay]
+source = ".reference"
+
+[agents.claude]
+command = ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits", "--output-format", "text"]
