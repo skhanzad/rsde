@@ -7,8 +7,6 @@
 @invariant The data file on disk is always valid JSON that `json.load` can read.
 @invariant Task ids are positive integers and are never reused, even after a task is removed.
 
-@depends tool:python3
-
 This is the root of the spec graph: it describes the complete desired state of
 the repository. Each `@spec` below owns one part of the system. Intent (goals,
 constraints, invariants) flows down to every child; verification evidence flows
@@ -28,5 +26,5 @@ end-to-end test below passes.
 @behavior Referring to a task id that does not exist prints `error: ...` to stderr and exits with status 1.
 
 @implement tests/test_end_to_end.py
-@verify python3 -m unittest tests.test_end_to_end
+@verify {python} -m unittest tests.test_end_to_end
 @done The end-to-end test drives the real CLI, as a subprocess, through a full add → list → done cycle.

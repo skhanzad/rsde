@@ -1,7 +1,7 @@
 """Subprocess execution shared by verification and agent adapters.
 
-Processes run in their own session so a timeout can kill the whole process
-tree (a test runner and everything it spawned), not just the shell.
+Timeouts terminate the process tree: a session on POSIX, or ``taskkill /T``
+on Windows, including the test runner and everything it spawned.
 """
 
 from __future__ import annotations
@@ -56,6 +56,7 @@ def run_process(
     """Run a process, capturing combined stdout/stderr, with a hard timeout."""
     started = time.monotonic()
     full_env = {k: v for k, v in os.environ.items() if k not in unset_env}
+    full_env.setdefault("PYTHONIOENCODING", "utf-8")
     full_env.update(env or {})
     try:
         proc = subprocess.Popen(
@@ -79,7 +80,7 @@ def run_process(
     def pump() -> None:
         assert proc.stdout is not None
         for raw in iter(proc.stdout.readline, b""):
-            line = raw.decode("utf-8", "replace")
+            line = raw.decode("utf-8", "replace").replace("\r\n", "\n")
             chunks.append(line)
             if log is not None:
                 log.write(line)
@@ -118,6 +119,22 @@ def run_process(
 
 
 def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
+    if os.name == "nt":
+        # terminate()/kill() only stop the immediate process on Windows. Kill
+        # descendants before their parent disappears and they become orphaned.
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            )
+            proc.wait(timeout=5)
+            return
+        except (OSError, subprocess.TimeoutExpired):
+            pass  # Fall back to terminating the immediate process.
     try:
         if os.name == "posix":
             os.killpg(proc.pid, signal.SIGTERM)

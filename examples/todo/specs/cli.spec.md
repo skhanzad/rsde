@@ -18,5 +18,5 @@ argument parsing and the wiring between them.
 @behavior Errors are printed to stderr as `error: <message>`.
 
 @implement todo/cli.py, todo/__main__.py, tests/test_cli.py
-@verify python3 -m unittest tests.test_cli
+@verify {python} -m unittest tests.test_cli
 @done Every sub-command is reachable through `main(argv)` and returns the documented exit status.

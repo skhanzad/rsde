@@ -1,0 +1,7 @@
+include README.md
+graft tests
+graft examples
+graft scripts
+global-exclude *.py[cod]
+global-exclude .DS_Store
+prune examples/todo/.rsde

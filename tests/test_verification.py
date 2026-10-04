@@ -1,6 +1,7 @@
+import os
 import time
 
-from helpers import PYTHON
+import pytest
 from rsde.diagnostics import SourceSpan
 from rsde.process import tail
 from rsde.syntax.ast import ImplementTarget, SpecDocument, VerifyCommand
@@ -21,25 +22,38 @@ def spec(*commands, implement=()):
 
 
 def test_passing_and_failing_commands(tmp_path):
-    results = Verifier(tmp_path).verify(spec("echo hello", "echo oops >&2; exit 3"), [])
+    results = Verifier(tmp_path).verify(
+        spec("echo hello", '{python} -c "import sys; print(\'oops\', file=sys.stderr); sys.exit(3)"'), []
+    )
     assert [(r.passed, r.exit_code) for r in results] == [(True, 0), (False, 3)]
     assert results[0].output == "hello" and results[1].output == "oops"
 
 
 def test_commands_run_in_the_workspace_with_rsde_variables(tmp_path):
     (tmp_path / "marker.txt").write_text("x")
-    result = Verifier(tmp_path).run_command(spec(), 'test -f marker.txt && test "$RSDE_SPEC_ID" = a')
+    result = Verifier(tmp_path).run_command(
+        spec(),
+        '{python} -c "import os; from pathlib import Path; '
+        "assert Path('marker.txt').is_file(); assert os.environ['RSDE_SPEC_ID'] == 'a'\"",
+    )
     assert result.passed
 
 
-def test_multi_line_scripts(tmp_path):
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell syntax")
+def test_multi_line_posix_scripts(tmp_path):
     result = Verifier(tmp_path).run_command(spec(), "set -e\necho one\nfalse\necho never")
     assert not result.passed and result.output == "one"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows batch syntax")
+def test_multi_line_windows_scripts(tmp_path):
+    result = Verifier(tmp_path).run_command(spec(), "echo one\nexit /b 3\necho never")
+    assert result.exit_code == 3 and result.output == "one"
+
+
 def test_timeouts_kill_the_process_tree(tmp_path):
     started = time.monotonic()
-    result = Verifier(tmp_path, timeout=0.5).run_command(spec(), f'{PYTHON} -c "import time; time.sleep(30)"')
+    result = Verifier(tmp_path, timeout=0.5).run_command(spec(), '{python} -c "import time; time.sleep(30)"')
     assert result.timed_out and not result.passed and result.exit_code is None
     assert time.monotonic() - started < 10
     assert "timed out" in result.output
@@ -47,7 +61,7 @@ def test_timeouts_kill_the_process_tree(tmp_path):
 
 def test_unknown_commands_fail_cleanly(tmp_path):
     result = Verifier(tmp_path).run_command(spec(), "rsde-definitely-not-a-command")
-    assert not result.passed and result.exit_code == 127
+    assert not result.passed and result.exit_code != 0
 
 
 def test_implementation_check(tmp_path):

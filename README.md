@@ -25,7 +25,9 @@ work never counts.
 
 ## Contents
 
+- [Installation](#installation)
 - [Quick start](#quick-start)
+- [Python library](#python-library)
 - [The language](#the-language)
 - [Semantics](#semantics)
 - [Validation and diagnostics](#validation-and-diagnostics)
@@ -36,15 +38,79 @@ work never counts.
 - [Configuration](#configuration)
 - [Architecture](#architecture)
 - [Development](#development)
+- [Releasing](#releasing)
 - [Limitations and roadmap](#limitations-and-roadmap)
+
+## Installation
+
+RSDE runs on **Windows, macOS, and Linux** with **Python 3.11 or newer**.
+It is a pure Python package with no runtime dependencies or native compiler
+requirements. Installing it provides both `import rsde` and the `rsde` command.
+
+### Install the CLI
+
+With [pipx](https://pipx.pypa.io/stable/installation/) installed, run the same
+commands on all three platforms:
+
+```sh
+pipx install "https://github.com/skhanzad/rsde/archive/refs/heads/main.zip"
+pipx ensurepath
+```
+
+Open a new terminal after `ensurepath`, then run `rsde --version`.
+The HTTPS archive install does not require Git or a GitHub account.
+Upgrade with `pipx upgrade rsde`; remove it with `pipx uninstall rsde`.
+
+If you already use [uv](https://docs.astral.sh/uv/), it can also install the CLI
+and provide a compatible Python interpreter:
+
+```sh
+uv tool install --python 3.11 "https://github.com/skhanzad/rsde/archive/refs/heads/main.zip"
+```
+
+### Install as a library
+
+Inside your application's virtual environment:
+
+```sh
+python -m pip install "https://github.com/skhanzad/rsde/archive/refs/heads/main.zip"
+python -m rsde --version
+```
+
+To create an environment first:
+
+| Platform | Create | Activate |
+|---|---|---|
+| Linux / macOS | `python3 -m venv .venv` | `source .venv/bin/activate` |
+| Windows PowerShell | `py -3 -m venv .venv` | `.venv\Scripts\Activate.ps1` |
+| Windows Command Prompt | `py -3 -m venv .venv` | `.venv\Scripts\activate.bat` |
+
+Activation is optional: use `.venv/bin/python` on Linux/macOS or
+`.venv\Scripts\python.exe` on Windows in place of `python`. The corresponding
+`rsde` executable is in the same directory.
+
+You can also install a downloaded wheel with
+`python -m pip install rsde-0.1.0-py3-none-any.whl`. One wheel works on all
+supported platforms. The GitHub installation commands above work before the
+first PyPI release; **`pip install rsde` requires publishing to PyPI first**
+(see [Releasing](#releasing)).
 
 ## Quick start
 
-RSDE needs Python 3.11 or newer and has no runtime dependencies.
+After installing RSDE, create your own project:
 
 ```sh
-pip install -e .                      # from this repository; installs the `rsde` command
-cp -r examples/todo /tmp/todo && cd /tmp/todo
+rsde init my-project
+cd my-project
+rsde check
+```
+
+Edit `master.md` to describe your project and its checks. To try the bundled
+offline demo, clone or download this repository, then run from its root:
+
+```sh
+python -c "import shutil; shutil.copytree('examples/todo', 'todo-demo')"
+cd todo-demo
 
 rsde check                            # validate the whole spec graph
 rsde graph                            # hierarchy + dependency graph
@@ -81,6 +147,45 @@ To use a real coding agent, run `rsde execute --agent claude` or `--agent codex`
 (see [Coding-agent adapters](#coding-agent-adapters)). To start your own project,
 run `rsde init`.
 
+## Python library
+
+Parse a spec from a string without reading or changing any files:
+
+```python
+from rsde import parse_document
+
+document, diagnostics = parse_document(
+    "# Storage\n@goal Save tasks.\n@implement storage.py\n",
+    path="specs/storage.spec.md",
+)
+print(document.id)       # specs/storage
+print(document.goals[0].text)
+for diagnostic in diagnostics:
+    print(diagnostic.code, diagnostic.message)
+```
+
+Load and validate a complete project without invoking an agent:
+
+```python
+from pathlib import Path
+from rsde import build_graph
+from rsde.repository.config import open_workspace
+
+workspace = open_workspace(Path("my-project"))
+graph = build_graph(workspace.root, workspace.root_spec, ignore=workspace.ignore)
+if graph.ok:
+    print(list(graph.specs))
+else:
+    for diagnostic in graph.errors:
+        print(diagnostic.code, diagnostic.message)
+```
+
+The top-level API exports `parse_document`, `SpecDocument`, `build_graph`,
+`SpecGraph`, and `__version__`. Type annotations ship with the package.
+Execution is also available through `rsde.engine.Executor` and
+`rsde.engine.ExecuteOptions`; adapters implement `rsde.agents.AgentAdapter`.
+The library remains at version 0.x, so pin a version when integrating it.
+
 ## The language
 
 ### A spec file
@@ -109,6 +214,20 @@ never parsed for meaning.
 @verify python3 -m unittest tests.test_storage
 @done Storage tests cover a missing file, id allocation after removal and atomic replacement.
 ```
+
+For Python checks that work across platforms, use an unquoted `{python}` token:
+
+```markdown
+@verify {python} -m unittest tests.test_storage
+```
+
+RSDE substitutes the correctly quoted path of its own Python interpreter, including
+when that path contains spaces. This is the interpreter in RSDE's environment;
+if your tests need project dependencies, install RSDE in that environment or
+invoke your project's test runner explicitly. Commands otherwise use `/bin/sh`
+on Linux/macOS and `cmd.exe` on Windows. Use separate `@verify` directives or a
+portable Python script for checks shared across platforms. Shell-specific
+commands such as `grep`, `test`, and `set -e` still require the appropriate shell.
 
 ### Directives
 
@@ -635,10 +754,20 @@ contains deliberate mistakes that showcase the diagnostics.
 ## Development
 
 ```sh
-pip install -e ".[dev]"
-pytest                      # 220 tests, a few seconds, no network
-mypy src                    # the codebase is type-clean
+python -m pip install -e ".[dev]"
+python -m pytest
+python -m mypy src
+python -m build
+python -m twine check --strict dist/*
+python scripts/check_install.py dist
 ```
+
+Run these commands from a virtual environment. CI builds the source archive and
+wheel, runs the tests against the wheel on Windows, macOS and Linux with Python
+3.11–3.14, and checks clean installations of both distributions. Installation
+checks cover the library imports, both CLI entry points, verification and paths
+containing spaces. Build and installation checks need network access to fetch
+build tools; the unit tests and replay demo run offline.
 
 The tests cover every diagnostic code, fingerprint invalidation, satisfaction
 semantics, the executor lifecycle (ordering, blocking, retries, the sticky scope
@@ -647,11 +776,35 @@ and integrity guards, settling), reconciliation, every CLI command, the adapters
 end, regressions for every issue found in review, and a fuzz test of the front
 end.
 
+## Releasing
+
+The package is ready for PyPI Trusted Publishing. A maintainer must connect their
+PyPI account before the first release; no PyPI token belongs in this repository.
+
+1. Add a [pending publisher on PyPI](https://pypi.org/manage/account/publishing/)
+   with project name **rsde**, owner **skhanzad**, repository **rsde**, workflow
+   **publish.yml**, and environment **pypi**. PyPI decides name availability when
+   creating the project.
+2. Create the **pypi** environment in the repository's GitHub settings.
+3. Set the release version in `src/rsde/__init__.py`. Package metadata and the CLI
+   read this single version. Commit and push to `main`, then wait for CI to pass.
+4. Publish a GitHub release with the matching tag, for example **v0.1.0**.
+   The publication workflow rebuilds and runs the complete platform matrix,
+   checks that the tag matches the wheel version, then uploads the tested wheel
+   and source archive to PyPI.
+
+After that release succeeds, users can install with `pipx install rsde` for the
+CLI or `python -m pip install rsde` for the library. See the
+[PyPI Trusted Publishing documentation](https://docs.pypi.org/trusted-publishers/)
+for account setup details.
+
 ## Limitations and roadmap
 
 - **Sequential execution.** Independent specs could run in parallel; the plan
   already exposes each step's prerequisites.
-- **POSIX shell.** `@verify` commands run with `/bin/sh`.
+- **Host shell.** Verification uses `/bin/sh` on POSIX and `cmd.exe` on Windows;
+  shell scripts must match the platform. `{python}` checks work on all three
+  supported platforms when their Python code and dependencies are portable.
 - **Agent-written tests.** An agent that writes its own tests can write weak ones.
   Keep acceptance tests out of the implementing agent's reach: put them in an
   ancestor's `@implement` and its `@verify`, which descendants' agents cannot

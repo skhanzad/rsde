@@ -27,6 +27,7 @@ from typing import Any, ClassVar, Mapping
 
 from rsde.agents.base import AgentAdapter, AgentConfigError, AgentResult, AgentTask
 from rsde.process import ProcessResult, run_process, tail
+from rsde.verification.runner import expand_verify_command
 
 #: Linux limits a single argv entry to 128 KiB; stay well below it.
 MAX_PROMPT_ARG_BYTES = 100_000
@@ -171,7 +172,7 @@ class ClaudeCodeAdapter(CommandAdapter):
         the checks that define success, and nothing else, without a permission prompt."""
         argv, stdin = super().build_argv(task)
         if self.options.get("allow_verify_commands", True):
-            rules = [rule for command in task.verify_commands for rule in _bash_rules(command)]
+            rules = [rule for command in task.verify_commands for rule in _bash_rules(expand_verify_command(command))]
             if rules:
                 argv += ["--allowedTools", *rules]  # variadic flag: keep it last
         return argv, stdin

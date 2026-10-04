@@ -5,4 +5,4 @@
 @requires auth.session
 @provides http.api
 @implment api/
-@verify python3 -m unittest discover -s api
+@verify {python} -m unittest discover -s api

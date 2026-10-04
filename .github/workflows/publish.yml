@@ -1,0 +1,47 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/rsde/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v8
+        with:
+          name: distributions
+          path: dist
+      - name: Require the release tag to match the package version
+        run: |
+          python - <<'PY'
+          import os
+          from email.parser import Parser
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          with ZipFile(next(Path("dist").glob("*.whl"))) as wheel:
+              name = next(name for name in wheel.namelist() if name.endswith(".dist-info/METADATA"))
+              version = Parser().parsestr(wheel.read(name).decode("utf-8"))["Version"]
+          expected = f"v{version}"
+          actual = os.environ["GITHUB_REF_NAME"]
+          if actual != expected:
+              raise SystemExit(f"Release tag {actual!r} must match package version {expected!r}")
+          PY
+      - name: Publish the tested distributions
+        uses: pypa/gh-action-pypi-publish@v1.14.2

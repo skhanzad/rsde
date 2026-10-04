@@ -8,3 +8,8 @@ spec is backed by passing verification evidence.
 """
 
 __version__ = "0.1.0"
+
+from rsde.graph import SpecGraph, build_graph
+from rsde.syntax import SpecDocument, parse_document
+
+__all__ = ["SpecDocument", "SpecGraph", "__version__", "build_graph", "parse_document"]

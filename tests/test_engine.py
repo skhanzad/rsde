@@ -14,21 +14,21 @@ SPECS = {
         @goal Both parts work together.
         @spec lib.spec.md
         @spec app.spec.md
-        @verify test -f lib.txt && test -f app.txt
+        @verify {python} -c "from pathlib import Path; assert Path('lib.txt').is_file() and Path('app.txt').is_file()"
         """,
     "lib.spec.md": """
         # Lib
         @goal A library.
         @provides lib.api
         @implement lib.txt
-        @verify grep -q "lib ok" lib.txt
+        @verify {python} -c "from pathlib import Path; assert 'lib ok' in Path('lib.txt').read_text()"
         """,
     "app.spec.md": """
         # App
         @goal An app on top of the library.
         @requires lib.api
         @implement app.txt
-        @verify grep -q "app ok" app.txt
+        @verify {python} -c "from pathlib import Path; assert 'app ok' in Path('app.txt').read_text()"
         """,
 }
 
@@ -88,7 +88,7 @@ def test_retries_receive_the_previous_failures(tmp_path):
     assert report.satisfied
     lib_tasks = [t for t in agent.tasks if t.spec_id == "lib"]
     assert len(lib_tasks) == 2
-    assert lib_tasks[1].failures and "grep -q" in lib_tasks[1].failures[-1].command
+    assert lib_tasks[1].failures and "assert 'lib ok'" in lib_tasks[1].failures[-1].command
     assert "## What is currently unsatisfied" in lib_tasks[1].prompt
     assert report.outcomes["lib"].message == "satisfied after 2 agent attempts"
 
@@ -238,7 +238,10 @@ def test_reconcile_catches_drift_that_fingerprints_cannot_see(tmp_path):
     # lib's check reads a file it does not own, so editing that file leaves the
     # cached evidence "fresh" — only a full audit notices the drift.
     extra = {
-        "lib.spec.md": SPECS["lib.spec.md"].replace('grep -q "lib ok" lib.txt', 'grep -q "lib ok" lib.txt && grep -q on flag.txt'),
+        "lib.spec.md": SPECS["lib.spec.md"].replace(
+            "assert 'lib ok' in Path('lib.txt').read_text()",
+            "assert 'lib ok' in Path('lib.txt').read_text() and 'on' in Path('flag.txt').read_text()",
+        ),
         "flag.txt": "on\n",
     }
     run(tmp_path, extra=extra)

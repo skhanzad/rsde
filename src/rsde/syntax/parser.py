@@ -41,7 +41,7 @@ EXAMPLES: dict[DirectiveKind, str] = {
     DirectiveKind.CONSTRAINT: "@constraint Use only the Python standard library.",
     DirectiveKind.BEHAVIOR: "@behavior `todo add \"Buy milk\"` prints the new task id.",
     DirectiveKind.INVARIANT: "@invariant Task ids are never reused.",
-    DirectiveKind.VERIFY: "@verify python3 -m unittest tests.test_storage",
+    DirectiveKind.VERIFY: "@verify {python} -m unittest tests.test_storage",
     DirectiveKind.IMPLEMENT: "@implement todo/storage.py, tests/test_storage.py",
     DirectiveKind.DONE: "@done All storage tests pass, including the error paths.",
 }

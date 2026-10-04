@@ -580,6 +580,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # Redirected Windows streams and older terminals may use an encoding that
+    # cannot represent spec titles or diagnostic punctuation.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(errors="replace")
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "handler", None):

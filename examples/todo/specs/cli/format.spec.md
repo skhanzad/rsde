@@ -9,5 +9,5 @@
 @invariant Formatting is pure: it never reads or writes files.
 
 @implement todo/format.py, tests/test_format.py
-@verify python3 -m unittest tests.test_format
+@verify {python} -m unittest tests.test_format
 @done Formatting tests pin down the exact output strings.

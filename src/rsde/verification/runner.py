@@ -4,7 +4,9 @@ A spec's checks are, in order:
 
 1. the built-in *implementation check* (only if the spec has ``@implement``):
    every declared path or glob must match at least one file;
-2. every ``@verify`` command, run with ``/bin/sh`` from the workspace root.
+2. every ``@verify`` command, run from the workspace root with the host shell
+   (``/bin/sh`` on POSIX, ``cmd.exe`` on Windows). ``{python}`` expands to the
+   quoted Python executable running RSDE.
 
 A check passes only if it exits with status 0 within the timeout. All checks
 run even after a failure, so an agent sees every problem at once.
@@ -12,15 +14,26 @@ run even after a failure, so an agent sees every problem at once.
 
 from __future__ import annotations
 
+import os
+import shlex
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import Callable, Sequence
 
-from rsde.process import run_process, tail
+from rsde.process import ProcessResult, run_process, tail
 from rsde.repository.files import matching_files
 from rsde.repository.state import CheckResult
 from rsde.syntax.ast import SpecDocument
 
 IMPLEMENTATION_CHECK = "rsde: declared implementation exists"
+
+
+def expand_verify_command(command: str) -> str:
+    """Resolve portable placeholders using quoting for the host shell."""
+    python = subprocess.list2cmdline([sys.executable]) if os.name == "nt" else shlex.quote(sys.executable)
+    return command.replace("{python}", python)
 
 
 class Verifier:
@@ -39,7 +52,20 @@ class Verifier:
 
     def run_command(self, doc: SpecDocument, command: str, *, log_path: Path | None = None) -> CheckResult:
         env = {"RSDE_SPEC_ID": doc.id, "RSDE_SPEC_FILE": doc.path, "RSDE_WORKSPACE": str(self.root)}
-        result = run_process(command, cwd=self.root, shell=True, env=env, timeout=self.timeout, log_path=log_path)
+        expanded = expand_verify_command(command)
+
+        def run(script: str) -> ProcessResult:
+            return run_process(script, cwd=self.root, shell=True, env=env, timeout=self.timeout, log_path=log_path)
+
+        if os.name == "nt" and "\n" in expanded:
+            # cmd /c does not execute embedded newlines as a batch script.
+            # Keep the temporary script outside the tracked workspace.
+            with tempfile.TemporaryDirectory(prefix="rsde-verify-") as directory:
+                script = Path(directory) / "verify.cmd"
+                script.write_text("@echo off\n" + expanded + "\n", encoding="utf-8")
+                result = run(subprocess.list2cmdline([str(script)]))
+        else:
+            result = run(expanded)
         output = tail(result.output)
         if result.error:
             output = f"could not run check: {result.error}"

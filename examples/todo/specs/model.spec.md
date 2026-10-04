@@ -11,5 +11,5 @@
 @invariant A `Task` never changes after construction.
 
 @implement todo/__init__.py, todo/model.py, tests/test_model.py
-@verify python3 -m unittest tests.test_model
+@verify {python} -m unittest tests.test_model
 @done Model tests cover validation edge cases and the dict round-trip.

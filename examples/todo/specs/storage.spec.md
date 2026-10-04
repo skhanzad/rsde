@@ -16,5 +16,5 @@
 @invariant The highest id ever issued is stored in the file, so ids are never reused after a removal.
 
 @implement todo/storage.py, tests/test_storage.py
-@verify python3 -m unittest tests.test_storage
+@verify {python} -m unittest tests.test_storage
 @done Storage tests cover a missing file, id allocation after removal, unknown ids and atomic replacement.

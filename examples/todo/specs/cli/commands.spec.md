@@ -11,5 +11,5 @@
 @behavior `done(store, task_id)` and `remove(store, task_id)` raise `TaskNotFound` (a subclass of `LookupError`) for unknown ids.
 
 @implement todo/commands.py, tests/test_commands.py
-@verify python3 -m unittest tests.test_commands
+@verify {python} -m unittest tests.test_commands
 @done Commands are covered for both the success and the unknown-id paths.

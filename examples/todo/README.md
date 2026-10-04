@@ -13,7 +13,7 @@ master.md                      Todo CLI: constraints and invariants for everythi
 ```
 
 It exercises every part of the language: nested `@spec` links in path form,
-capabilities, a wikilink `@depends`, an external `tool:` dependency, constraints
+capabilities, a wikilink `@depends`, constraints
 and invariants that every descendant inherits, `@implement` ownership, a
 `@verify` command per spec, and an end-to-end check at the root that is
 satisfied only after every child is.
@@ -23,7 +23,8 @@ satisfied only after every child is.
 Work on a copy so the repository stays clean:
 
 ```sh
-cp -r examples/todo /tmp/todo && cd /tmp/todo
+python -c "import shutil; shutil.copytree('examples/todo', 'todo-demo')"
+cd todo-demo
 
 rsde check                      # the graph is valid
 rsde graph                      # hierarchy and dependencies

@@ -1,7 +1,7 @@
 """Compile a spec into a deterministic agent task prompt.
 
 The prompt is generated from the typed graph, never by pasting the spec file
-through: the same graph, files and evidence always yield the same prompt.
+through: the same graph, files, runtime and evidence always yield the same prompt.
 It states the scope the agent may touch, the effective intent (own plus
 inherited constraints and invariants), the interfaces to other specs, and
 exactly which checks are failing and why.
@@ -16,6 +16,7 @@ from rsde.graph.model import SpecGraph
 from rsde.repository.files import matching_files
 from rsde.repository.state import CheckResult
 from rsde.syntax.ast import Text
+from rsde.verification.runner import expand_verify_command
 
 PREAMBLE = (
     "You are a coding agent invoked by RSDE (Recursive Spec-Driven Engineering). "
@@ -130,13 +131,14 @@ def render_task_prompt(
     if doc.verify:
         w("Run from the workspace root; every command must exit with status 0:")
         for i, check in enumerate(doc.verify, 1):
-            if "\n" in check.command:
+            command = expand_verify_command(check.command)
+            if "\n" in command:
                 w(f"{i}. script:")
                 w("```sh")
-                w(check.command)
+                w(command)
                 w("```")
             else:
-                w(f"{i}. `{check.command}`")
+                w(f"{i}. `{command}`")
     else:
         w("This spec declares no @verify commands; only the presence of its files is checked.")
     w("")

@@ -1,6 +1,7 @@
 """The rsde command line: every command, its output formats and exit codes."""
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -17,21 +18,21 @@ SPECS = {
         @goal Everything works.
         @spec lib.spec.md
         @spec app.spec.md
-        @verify test -f lib.txt
+        @verify {python} -c "from pathlib import Path; assert Path('lib.txt').is_file()"
         """,
     "lib.spec.md": """
         # Lib
         @goal A library.
         @provides lib.api
         @implement lib.txt
-        @verify grep -q ok lib.txt
+        @verify {python} -c "from pathlib import Path; assert 'ok' in Path('lib.txt').read_text()"
         """,
     "app.spec.md": """
         # App
         @goal An app.
         @requires lib.api
         @implement app.txt
-        @verify grep -q ok app.txt
+        @verify {python} -c "from pathlib import Path; assert 'ok' in Path('app.txt').read_text()"
         """,
     "ref/lib.txt": "ok\n",
     "ref/app.txt": "ok\n",
@@ -67,6 +68,16 @@ def test_version_and_help(capsys):
 def test_module_entry_point():
     proc = subprocess.run([sys.executable, "-m", "rsde", "--version"], capture_output=True, text=True)
     assert proc.returncode == 0 and proc.stdout.strip() == f"rsde {__version__}"
+
+
+def test_cli_handles_redirected_ascii_output(tmp_path):
+    result = subprocess.run(
+        [sys.executable, "-m", "rsde", "init", str(tmp_path / "project")],
+        env={**os.environ, "PYTHONIOENCODING": "ascii:strict"},
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert b"Initialised an RSDE workspace" in result.stdout
 
 
 def test_check_valid_and_json(project, capsys):
