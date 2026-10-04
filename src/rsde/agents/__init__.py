@@ -66,8 +66,9 @@ def available_agents(config: Config) -> dict[str, str]:
     """Name → description of every adapter that can be selected."""
     agents = {name: cls.description for name, cls in BUILTIN_ADAPTERS.items()}
     for name, options in config.agents.items():
-        kind = options.get("type", name)
-        agents[name] = f"configured in rsde.toml (type: {kind})"
+        kind = str(options.get("type", name))
+        base = BUILTIN_ADAPTERS[kind].description if kind in BUILTIN_ADAPTERS else f"type {kind}"
+        agents[name] = f"{base} [configured]"
     for name in _entry_points():
         agents.setdefault(name, "installed plugin")
     return agents

@@ -434,9 +434,10 @@ def cmd_agents(ctx: Context, args: argparse.Namespace) -> int:
         try:
             adapter = create_adapter(name, ws.config, ws.root)
             reason = adapter.unavailable_reason()
-        except AgentConfigError as exc:
-            reason = str(exc).splitlines()[0]
-        marker = ctx.style.ok(reason is None)
+            marker = ctx.style.ok(reason is None)
+        except AgentConfigError:
+            reason = "needs configuration in rsde.toml (see README)"
+            marker = ctx.style.dim("·")
         default = ctx.style.cyan(" (default)") if name == ws.config.agent else ""
         rows.append((marker, name, description + default, reason))
         width = max(width, len(name))
