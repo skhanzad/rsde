@@ -248,7 +248,7 @@ CLAUDE_EVENTS = [
 
 def fake_claude(tmp_path, events):
     script = "import json, sys\nfor line in json.loads(sys.argv[1]): print(line if isinstance(line, str) else json.dumps(line))"
-    payload = json.dumps(events).replace("WORKSPACE", str(tmp_path))
+    payload = json.dumps(events).replace("WORKSPACE", json.dumps(str(tmp_path))[1:-1])
     return ClaudeCodeAdapter({"command": [PYTHON, "-c", script, payload]}, workspace=tmp_path)
 
 
@@ -261,6 +261,20 @@ def test_claude_stream_json_is_rendered_live_and_interpreted(tmp_path):
         "Edit shop/cart.py",
     ]
     assert result.completed and result.summary == "Claude Code finished · 3 turns · $0.01" and result.output == "Done."
+
+
+def test_tool_paths_are_made_relative_before_truncating(tmp_path):
+    workspace = tmp_path / ("long-workspace-" * 12)
+    adapter = ClaudeCodeAdapter(workspace=workspace)
+    event = {
+        "type": "assistant",
+        "message": {"content": [{
+            "type": "tool_use",
+            "name": "Edit",
+            "input": {"file_path": str(workspace / "shop" / "cart.py")},
+        }]},
+    }
+    assert adapter.format_line(json.dumps(event)) == "Edit shop/cart.py"
 
 
 def test_claude_error_results_are_not_completed(tmp_path):

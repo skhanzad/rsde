@@ -190,7 +190,9 @@ class ClaudeCodeAdapter(CommandAdapter):
                 if block.get("type") == "text" and str(block.get("text", "")).strip():
                     shown.append(_shorten(str(block["text"])))
                 elif block.get("type") == "tool_use":
-                    shown.append(f"{block.get('name', 'tool')} {_describe_tool_input(block.get('input'))}".rstrip())
+                    shown.append(
+                        f"{block.get('name', 'tool')} {_describe_tool_input(block.get('input'), self.workspace)}".rstrip()
+                    )
             return "\n".join(shown).replace(f"{self.workspace}/", "") or None
         return None  # the final result is reported by the executor as the attempt summary
 
@@ -241,12 +243,19 @@ def _shorten(text: str, width: int = 160) -> str:
     return first if len(first) <= width else first[: width - 1] + "…"
 
 
-def _describe_tool_input(value: Any) -> str:
+def _describe_tool_input(value: Any, workspace: Path) -> str:
     if not isinstance(value, dict):
         return ""
     for key in ("file_path", "path", "command", "pattern", "url", "description"):
         if value.get(key):
-            return _shorten(str(value[key]), 120)
+            text = str(value[key])
+            # Strip the workspace before shortening: macOS temporary directory
+            # prefixes can consume the entire display width by themselves.
+            for prefix in (str(workspace), workspace.as_posix()):
+                text = text.replace(prefix + "/", "").replace(prefix + "\\", "")
+            if key in ("file_path", "path"):
+                text = Path(text).as_posix()
+            return _shorten(text, 120)
     return ""
 
 
