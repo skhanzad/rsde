@@ -57,7 +57,9 @@ class UsageError(Exception):
 class Context:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
-        self.cwd = Path.cwd()
+        explicit = getattr(args, "workspace", None)
+        # Like `git -C DIR`: with -C, command-line paths are relative to DIR.
+        self.cwd = (Path.cwd() / explicit).resolve() if explicit is not None else Path.cwd()
         color = getattr(args, "color", "auto") or "auto"
         self.style = Style.for_stream(sys.stdout, color)
         self.err_style = Style.for_stream(sys.stderr, color)
@@ -73,7 +75,9 @@ class Context:
 
     def workspace(self, target: str | None = None) -> Workspace:
         explicit = getattr(self.args, "workspace", None)
-        hint = Path(target) if target and Path(target).exists() else None
+        if explicit is not None:
+            explicit = self.cwd
+        hint = self.cwd / target if target and (self.cwd / target).exists() else None
         try:
             return open_workspace(self.cwd, explicit, hint)
         except WorkspaceError:
@@ -91,7 +95,7 @@ class Context:
         return rel
 
     def graph(self, ws: Workspace, root_spec: str | None = None) -> SpecGraph:
-        return build_graph(ws.root, root_spec or ws.root_spec, ignore=ws.config.ignore)
+        return build_graph(ws.root, root_spec or ws.root_spec, ignore=ws.ignore)
 
     def valid_graph(self, ws: Workspace) -> SpecGraph | None:
         """Build the graph; on errors print them and return None."""
@@ -159,6 +163,8 @@ strict_scope = false
 
 def cmd_init(ctx: Context, args: argparse.Namespace) -> int:
     target = (ctx.cwd / (args.directory or ".")).resolve()
+    if target.exists() and not target.is_dir():
+        raise UsageError(f"{target} exists and is not a directory")
     target.mkdir(parents=True, exist_ok=True)
     files = {
         DEFAULT_ROOT_SPEC: MASTER_TEMPLATE.format(name=target.name.replace("-", " ").title() or "Project"),
@@ -212,10 +218,14 @@ def cmd_check(ctx: Context, args: argparse.Namespace) -> int:
 
 def _statuses(
     ws: Workspace, graph: SpecGraph
-) -> tuple[StateStore, dict[str, Fingerprint], dict[str, SpecStatus]]:
+) -> tuple[StateStore, Fingerprinter, dict[str, Fingerprint], dict[str, SpecStatus]]:
     state = StateStore(ws.state_dir)
-    fingerprints = Fingerprinter(graph, ws.config.ignore).compute(refresh=False)
-    return state, fingerprints, evaluate(graph, fingerprints, state.evidence)
+    fingerprinter = Fingerprinter(graph, ws.ignore)
+    fingerprints = fingerprinter.compute()
+    statuses = evaluate(
+        graph, fingerprints, state.evidence, violations=state.violations, hash_of=fingerprinter.hasher.hash_file
+    )
+    return state, fingerprinter, fingerprints, statuses
 
 
 def cmd_graph(ctx: Context, args: argparse.Namespace) -> int:
@@ -226,7 +236,7 @@ def cmd_graph(ctx: Context, args: argparse.Namespace) -> int:
         return EXIT_FAIL
     statuses = None
     if graph.ok and not args.no_status and (ws.state_dir / "state.json").exists():
-        statuses = _statuses(ws, graph)[2]
+        statuses = _statuses(ws, graph)[3]
     if args.format == "mermaid":
         ctx.out(render_mermaid(graph, statuses))
     elif args.format == "dot":
@@ -245,9 +255,11 @@ def cmd_show(ctx: Context, args: argparse.Namespace) -> int:
     graph = ctx.graph(ws)
     spec_id = ctx.resolve(graph, args.spec)
     statuses = fingerprints = None
+    files = graph.files
     evidence_checks: tuple[CheckResult, ...] = ()
     if graph.ok:
-        _, fingerprints, statuses = _statuses(ws, graph)
+        _, fingerprinter, fingerprints, statuses = _statuses(ws, graph)
+        files = fingerprinter.files
         evidence = statuses[spec_id].evidence
         if evidence is not None and not evidence.passed:
             evidence_checks = tuple(evidence.checks)
@@ -259,7 +271,7 @@ def cmd_show(ctx: Context, args: argparse.Namespace) -> int:
         data = next(s for s in graph_to_dict(graph, statuses)["specs"] if s["id"] == spec_id)
         ctx.out(to_json(data))
         return EXIT_OK
-    ctx.out(render_show(graph, spec_id, ctx.style, statuses=statuses, fingerprints=fingerprints, files=graph.files))
+    ctx.out(render_show(graph, spec_id, ctx.style, statuses=statuses, fingerprints=fingerprints, files=files))
     return EXIT_OK
 
 
@@ -269,7 +281,7 @@ def cmd_status(ctx: Context, args: argparse.Namespace) -> int:
     if graph is None:
         return EXIT_FAIL
     target = ctx.resolve(graph, args.spec)
-    state, fingerprints, statuses = _statuses(ws, graph)
+    state, _, fingerprints, statuses = _statuses(ws, graph)
     for warning in state.warnings:
         ctx.warn(warning)
     if args.format == "json":
@@ -283,9 +295,9 @@ def cmd_status(ctx: Context, args: argparse.Namespace) -> int:
                 "verified_at": status.evidence.verified_at if status.evidence is not None else None,
             }
         ctx.out(to_json({"target": target, "satisfied": statuses[target].satisfied, "specs": specs}))
-        return EXIT_OK
-    ctx.out(render_status(graph, statuses, ctx.style, target))
-    return EXIT_OK
+    else:
+        ctx.out(render_status(graph, statuses, ctx.style, target))
+    return EXIT_OK if statuses[target].satisfied else EXIT_FAIL
 
 
 def _execute_options(ws: Workspace, args: argparse.Namespace) -> ExecuteOptions:
@@ -297,6 +309,7 @@ def _execute_options(ws: Workspace, args: argparse.Namespace) -> ExecuteOptions:
         force=getattr(args, "force", False),
         verify_only=getattr(args, "verify_only", False),
         strict_scope=args.strict_scope or config.strict_scope,
+        accept_scope_changes=args.accept_scope_changes,
     )
 
 
@@ -352,7 +365,7 @@ def _git_changes(root: Path, revision: str) -> list[str]:
             raise UsageError(f"git {' '.join(argv)} failed: {proc.stderr.strip() or proc.stdout.strip()}")
         return [line for line in proc.stdout.splitlines() if line.strip()]
 
-    changed = git("diff", "--name-only", "--relative", revision, "--")
+    changed = git("diff", "--name-only", "--no-renames", "--relative", revision, "--")
     untracked = git("ls-files", "--others", "--exclude-standard")
     return sorted({*changed, *untracked})
 
@@ -469,6 +482,19 @@ examples:
 """
 
 
+def _positive(kind: type[int] | type[float]) -> Callable[[str], int | float]:
+    def parse(text: str) -> int | float:
+        try:
+            value = kind(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"expected a number, got {text!r}") from None
+        if value <= 0:
+            raise argparse.ArgumentTypeError(f"must be greater than 0, got {text}")
+        return value
+
+    return parse
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rsde",
@@ -489,10 +515,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     def agent_options(p: argparse.ArgumentParser) -> None:
         p.add_argument("--agent", metavar="NAME", help="coding agent (default: [execute].agent, else none)")
-        p.add_argument("--max-attempts", type=int, metavar="N", help="agent attempts per spec (default 3)")
-        p.add_argument("--verify-timeout", type=float, metavar="SEC", help="timeout per @verify command")
-        p.add_argument("--agent-timeout", type=float, metavar="SEC", help="timeout per agent invocation")
+        p.add_argument("--max-attempts", type=_positive(int), metavar="N", help="agent attempts per spec (default 3)")
+        p.add_argument("--verify-timeout", type=_positive(float), metavar="SEC", help="timeout per @verify command")
+        p.add_argument("--agent-timeout", type=_positive(float), metavar="SEC", help="timeout per agent invocation")
         p.add_argument("--strict-scope", action="store_true", help="fail specs whose agent edits files outside @implement")
+        p.add_argument(
+            "--accept-scope-changes",
+            action="store_true",
+            help="accept recorded out-of-scope or spec-file changes after you have reviewed them",
+        )
         p.add_argument("-q", "--quiet", action="store_true", help="do not stream agent output")
 
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")

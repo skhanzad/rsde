@@ -129,7 +129,7 @@ never parsed for meaning.
 ### Syntax rules
 
 - **A directive is a line starting with `@name`**, optionally inside a list item
-  (`- @behavior …`) and optionally followed by a colon (`@goal: …`).
+  (`- @behavior …`) and optionally followed by a colon (`@goal: …`, `@goal:…`).
 - **Continuation:** following lines indented deeper than the directive belong to it.
   A blank line ends it.
 - **Block values:** a directive with no inline value takes the fenced code block that
@@ -144,13 +144,16 @@ never parsed for meaning.
   ````
 
 - **Opaque regions:** directives inside code fences and HTML comments are ignored, so
-  documentation can show examples. YAML front matter is skipped.
+  documentation can show examples. A comment hides its contents wherever it starts,
+  even mid-line, so nothing invisible on a rendered page can act as a directive.
+  YAML front matter and a byte-order mark are skipped.
 - **Escaping:** `\@` at the start of a line is a literal `@`.
 - **Strictness:** an unknown directive is an error, not prose. `@requries` gets
   *"did you mean `@requires`?"* instead of silently dropping a requirement.
 - **Lists:** `@spec`, `@depends`, `@requires`, `@provides` and `@implement` take
-  comma-separated lists. A single item may carry a description after ` — `, ` -- `
-  or ` - `. Values may be wrapped in backticks.
+  comma-separated lists, which may wrap onto indented continuation lines. A single
+  item may carry a description after ` — `, ` -- ` or ` - `. Values may be wrapped
+  in backticks.
 
 ### Spec references
 
@@ -233,8 +236,11 @@ be satisfied after the descendant.
 
 1. it declares at least one check (`@verify` or `@implement`) or has at least one child;
 2. its own checks passed against its **current fingerprint**;
-3. every child is satisfied; and
-4. every spec it depends on is satisfied.
+3. every child is satisfied;
+4. every spec it depends on is satisfied, and every `tool:` and `env:` dependency is
+   available; and
+5. no change an agent made outside its scope (under `--strict-scope`), or to a spec
+   file, is still present. See [Execution lifecycle](#execution-lifecycle).
 
 Its own checks are a built-in *implementation check* (every `@implement` path or
 glob matches at least one file) plus every `@verify` command. Evidence flows up
@@ -263,7 +269,7 @@ re-run, so `execute` is incremental, like `make`.
 | Status | Meaning |
 |---|---|
 | ✓ `satisfied` | Fresh passing evidence, and every child and dependency is satisfied. |
-| ✗ `failed` | Fresh evidence shows a failing check. |
+| ✗ `failed` | Fresh evidence shows a failing check, or an agent's out-of-scope change is still present. |
 | ↻ `stale` | Evidence exists, but the inputs changed since it was recorded. |
 | ○ `pending` | Never verified. |
 | ⊘ `blocked` | A dependency, or an external tool or variable, is not satisfied. |
@@ -335,7 +341,7 @@ fixed. Warnings are advisory; `check --strict` turns them into failures.
 | `rsde check [ROOT] [--strict]` | Validates the complete spec graph. Read-only. |
 | `rsde graph [--format text\|mermaid\|dot\|json]` | Shows the hierarchy and the dependency graph, annotated with status when evidence exists. |
 | `rsde show SPEC [--prompt]` | Shows one spec: inherited intent, interfaces, files, checks and evidence. `--prompt` prints the exact agent task. |
-| `rsde status [SPEC]` | Shows satisfaction from recorded evidence and current fingerprints. Runs nothing. |
+| `rsde status [SPEC]` | Shows satisfaction from recorded evidence and current fingerprints. Runs nothing; exits 1 until `SPEC` is satisfied. |
 | `rsde execute [SPEC] [--agent NAME]` | Resolves, plans, implements and verifies `SPEC` (default: the root) and everything it needs. |
 | `rsde execute --plan` | Prints the plan only. No side effects. |
 | `rsde execute --verify-only` / `--force` | Never invokes the agent (CI) / ignores fresh evidence. |
@@ -346,9 +352,10 @@ fixed. Warnings are advisory; `check --strict` turns them into failures.
 
 `SPEC` accepts a path (`specs/storage.spec.md`), an id (`specs/storage`), a
 wikilink (`[[storage]]`) or a unique name (`storage`). Most commands accept
-`--format json`, `-C DIR` and `--color auto|always|never`. Execution options:
+`--format json`, `--color auto|always|never` and `-C DIR`, which works like
+`git -C`: paths on the command line are then relative to `DIR`. Execution options:
 `--max-attempts N`, `--verify-timeout SEC`, `--agent-timeout SEC`,
-`--strict-scope`, and `-q` to hide the agent's output.
+`--strict-scope`, `--accept-scope-changes`, and `-q` to hide the agent's output.
 
 Exit codes are `0` for success, `1` when specs are invalid or not satisfied,
 `2` for usage, workspace or configuration errors, and `130` when interrupted.
@@ -399,10 +406,17 @@ maps to the owning spec) and explains every impact:
   the exact failing output. The same inputs always produce the same prompt.
   `rsde show SPEC --prompt` prints it.
 - **Scope guard.** The workspace is snapshotted before and after every agent run.
-  Changes outside the spec's `@implement` paths are recorded as scope violations
-  and fail the spec under `--strict-scope`.
+  Changes outside the spec's `@implement` paths are recorded. Under
+  `--strict-scope`, those still present after the last attempt fail the spec. The
+  judgement uses the net change, so an agent that reverts its own stray edit is not
+  penalised.
 - **Integrity guard.** If an agent modifies any spec file or `rsde.toml`, the run
   aborts: specs are the source of truth and only humans change them.
+- **Violations are sticky.** Both kinds of violation are stored with the file's
+  original hash. The spec stays failed on every later run, so the root cannot be
+  satisfied, until the file is restored or a human reviews the change and runs
+  `rsde execute --accept-scope-changes`. A plain re-run cannot launder a gutted
+  test.
 - **Settling.** If a later agent breaks a spec that was already verified,
   fingerprints expose it and the spec is re-verified in the same run.
 - **Audit trail.** `.rsde/runs/<run-id>/` keeps the plan, every prompt, every agent
@@ -415,8 +429,8 @@ it compares the repository with the spec graph, then makes the implementation
 conform, much like `terraform plan` followed by `apply`.
 
 1. **Survey** structural drift: declared files that do not exist, files claimed
-   by several specs, and files no spec owns. Markdown and repository metadata
-   are never treated as code.
+   by several specs, files no spec owns, and agent changes outside scope that are
+   still present. Markdown and repository metadata are never treated as code.
 2. **Audit:** run every spec's checks bottom-up, ignoring cached evidence. This
    catches drift that fingerprints cannot see, such as a toolchain upgrade, an
    environment change, or an edit to a file a check reads but no spec owns.
@@ -622,15 +636,16 @@ contains deliberate mistakes that showcase the diagnostics.
 
 ```sh
 pip install -e ".[dev]"
-pytest                      # 191 tests, a few seconds, no network
+pytest                      # 220 tests, a few seconds, no network
 mypy src                    # the codebase is type-clean
 ```
 
 The tests cover every diagnostic code, fingerprint invalidation, satisfaction
-semantics, the executor lifecycle (ordering, blocking, retries, the scope and
-integrity guards, settling), reconciliation, every CLI command, the adapters
-(including stream-json parsing against a fake `claude`), and both examples end
-to end.
+semantics, the executor lifecycle (ordering, blocking, retries, the sticky scope
+and integrity guards, settling), reconciliation, every CLI command, the adapters
+(including stream-json parsing against a fake `claude`), both examples end to
+end, regressions for every issue found in review, and a fuzz test of the front
+end.
 
 ## Limitations and roadmap
 
